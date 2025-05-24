@@ -11,10 +11,9 @@ from multiprocessing import Pool
 FILE_SIZES_MB = {"1": 10, "2": 50, "3": 100}
 CLIENT_POOLS = {"1": [1], "2": [5], "3": [50], "4": [1, 5, 50]}
 SERVER_POOLS = {"1": 1, "2": 5, "3": 50}
-PORT_DOWNLOAD = 6969
-PORT_UPLOAD = 6970
+PORT = 7777
 
-def send_command(command_str="", port=6969):
+def send_command(command_str="", port=7777):
     server_address = ('172.16.16.101', port)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect(server_address)
@@ -24,7 +23,7 @@ def send_command(command_str="", port=6969):
         sock.sendall(command_str.encode())
         data_received = ""
         while True:
-            data = sock.recv(16384)
+            data = sock.recv(1024 * 1024)
             if data:
                 data_received += data.decode()
                 if "\r\n\r\n" in data_received:
@@ -49,7 +48,7 @@ def perform_upload(file_path):
         }) + "\r\n\r\n"
 
         start = time.time()
-        response = send_command(payload, port=PORT_UPLOAD)
+        response = send_command(payload, port=PORT)
         duration = time.time() - start
         size_bytes = os.path.getsize(file_path)
         success = response and response.get("status") == "OK"
@@ -61,7 +60,7 @@ def perform_download(filename):
     try:
         command = f"GET {filename}"
         start = time.time()
-        response = send_command(command, port=PORT_DOWNLOAD)
+        response = send_command(command, port=PORT)
         duration = time.time() - start
 
         if response and response.get("status") == "OK":
@@ -97,7 +96,11 @@ def stress_test(task, file_path, pool_type="thread", client_pool=1):
 def init_csv(filename="stress_test_results.csv"):
     if not os.path.exists(filename):
         with open(filename, mode='w', newline='') as csv_file:
-            fieldnames = ["Nomor", "Operasi", "Volume", "Jumlah client worker pool", "Jumlah server worker pool", "Waktu total per client", "Throughput per client", "Jumlah sukses", "Jumlah gagal"]
+            fieldnames = [
+                "Nomor", "Operasi", "Volume", "Jumlah client worker pool", "Jumlah server worker pool",
+                "Waktu total per client", "Throughput per client (MB/s)", "Jumlah sukses", "Jumlah gagal",
+                "Jumlah worker server yang sukses", "Jumlah worker server yang gagal"
+            ]
             writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
             writer.writeheader()
 
@@ -109,7 +112,11 @@ def get_existing_row_count(filename="stress_test_results.csv"):
 
 def append_to_csv(row, filename="stress_test_results.csv"):
     with open(filename, mode='a', newline='') as csv_file:
-        fieldnames = ["Nomor", "Operasi", "Volume", "Jumlah client worker pool", "Jumlah server worker pool", "Waktu total per client", "Throughput per client", "Jumlah sukses", "Jumlah gagal"]
+        fieldnames = [
+            "Nomor", "Operasi", "Volume", "Jumlah client worker pool", "Jumlah server worker pool",
+            "Waktu total per client", "Throughput per client (MB/s)", "Jumlah sukses", "Jumlah gagal",
+            "Jumlah worker server yang sukses", "Jumlah worker server yang gagal"
+        ]
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writerow(row)
         print(row)
@@ -146,13 +153,18 @@ def main():
         for cp in client_pools:
             for sp in [server_pools]:
                 for op in ['upload', 'download']:
-                    print(f"\n--- Testing {op.upper()} for {size}MB file with {cp} clients and {sp} server workers ---")
                     pool_type = "thread" if op == 'upload' else "process"
+                    print(f"\n--- Testing {op.upper()} {size}MB | Client Pool: {cp} | Server Pool: {sp} ---")
                     results = stress_test(op, file_path, pool_type=pool_type, client_pool=cp)
                     success = sum(1 for r in results if r[0])
                     failed = len(results) - success
                     total_time = sum(r[1] for r in results if r[0]) / max(success, 1)
-                    throughput = sum(r[2] for r in results if r[0]) / max(total_time * success, 1)
+                    throughput_bytes = sum(r[2] for r in results if r[0]) / max(total_time * success, 1)
+                    throughput = throughput_bytes / (1024 * 1024)
+
+                    server_success = success
+                    server_failed = failed
+
                     row = {
                         "Nomor": row_id,
                         "Operasi": op,
@@ -160,9 +172,11 @@ def main():
                         "Jumlah client worker pool": cp,
                         "Jumlah server worker pool": sp,
                         "Waktu total per client": f"{total_time:.2f}",
-                        "Throughput per client": f"{throughput:.2f}",
+                        "Throughput per client (MB/s)": f"{throughput:.2f}",
                         "Jumlah sukses": success,
-                        "Jumlah gagal": failed
+                        "Jumlah gagal": failed,
+                        "Jumlah worker server yang sukses": server_success,
+                        "Jumlah worker server yang gagal": server_failed
                     }
                     append_to_csv(row)
                     row_id += 1
